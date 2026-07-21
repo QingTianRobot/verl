@@ -31,6 +31,7 @@ verl is fast with:
    start/install
    start/quickstart
    start/multinode
+   start/h200_docker_compose
    start/ray_debug_tutorial
    start/more_resources
    start/agentic_rl

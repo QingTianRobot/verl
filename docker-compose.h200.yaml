@@ -1,0 +1,98 @@
+name: ${COMPOSE_PROJECT_NAME:-verl-h200}
+
+x-verl-common: &verl-common
+  image: ${VERL_IMAGE:-ghcr.io/qingtianrobot/verl:h200-latest}
+  pull_policy: ${VERL_PULL_POLICY:-missing}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.h200
+    args:
+      VERL_BASE_IMAGE: ${VERL_BASE_IMAGE:-verlai/verl:vllm017.latest}
+  runtime: nvidia
+  gpus: all
+  network_mode: host
+  ipc: host
+  privileged: true
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 30s
+  working_dir: /workspace/verl
+  env_file:
+    - ${H200_ENV_FILE:-.env.h200}
+  environment:
+    PYTHONUNBUFFERED: "1"
+    PYTHONPATH: /workspace/verl
+    HF_HOME: /root/.cache/huggingface
+    RAY_ADDRESS: auto
+    RAY_USAGE_STATS_ENABLED: "0"
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+    TORCH_NCCL_AVOID_RECORD_STREAMS: "1"
+    CUDA_DEVICE_MAX_CONNECTIONS: "1"
+  volumes:
+    - type: bind
+      source: .
+      target: /workspace/verl
+    - type: bind
+      source: ${DATA_DIR:?Set DATA_DIR in .env.h200}
+      target: /root/data
+    - type: bind
+      source: ${MODEL_DIR:?Set MODEL_DIR in .env.h200}
+      target: /models
+    - type: bind
+      source: ${CHECKPOINT_DIR:?Set CHECKPOINT_DIR in .env.h200}
+      target: /workspace/verl/checkpoints
+    - type: bind
+      source: ${HF_CACHE_DIR:?Set HF_CACHE_DIR in .env.h200}
+      target: /root/.cache/huggingface
+  ulimits:
+    memlock:
+      soft: -1
+      hard: -1
+    stack:
+      soft: 67108864
+      hard: 67108864
+
+services:
+  ray-head:
+    <<: *verl-common
+    profiles: ["head"]
+    container_name: ${COMPOSE_PROJECT_NAME:-verl-h200}-ray-head
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        uv pip install --system --no-deps -e /workspace/verl
+        ray stop --force >/dev/null 2>&1 || true
+        exec ray start --head \
+          --node-ip-address="$${NODE_IP}" \
+          --port="$${RAY_PORT}" \
+          --dashboard-host=0.0.0.0 \
+          --dashboard-port="$${RAY_DASHBOARD_PORT}" \
+          --num-cpus="$${CPUS_PER_NODE}" \
+          --num-gpus="$${GPUS_PER_NODE}" \
+          --disable-usage-stats \
+          --block
+
+  ray-worker:
+    <<: *verl-common
+    profiles: ["worker"]
+    container_name: ${COMPOSE_PROJECT_NAME:-verl-h200}-ray-worker
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        uv pip install --system --no-deps -e /workspace/verl
+        ray stop --force >/dev/null 2>&1 || true
+        until (echo >/dev/tcp/$${RAY_HEAD_IP}/$${RAY_PORT}) >/dev/null 2>&1; do
+          echo "Waiting for Ray head at $${RAY_HEAD_IP}:$${RAY_PORT} ..."
+          sleep 5
+        done
+        exec ray start \
+          --address="$${RAY_HEAD_IP}:$${RAY_PORT}" \
+          --node-ip-address="$${NODE_IP}" \
+          --num-cpus="$${CPUS_PER_NODE}" \
+          --num-gpus="$${GPUS_PER_NODE}" \
+          --disable-usage-stats \
+          --block

@@ -1,0 +1,30 @@
+ARG VERL_BASE_IMAGE=verlai/verl:vllm017.latest
+FROM ${VERL_BASE_IMAGE}
+
+USER root
+SHELL ["/bin/bash", "-lc"]
+
+RUN if ! command -v curl >/dev/null 2>&1; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends ca-certificates curl && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi && \
+    curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    install -m 0755 /root/.local/bin/uv /usr/local/bin/uv && \
+    install -m 0755 /root/.local/bin/uvx /usr/local/bin/uvx && \
+    uv --version && \
+    uv pip install --system "TransferQueue==0.1.8"
+
+COPY . /opt/verl
+
+RUN uv pip install --system --no-deps -e /opt/verl
+
+ENV UV_LINK_MODE=copy \
+    UV_CACHE_DIR=/root/.cache/uv \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/opt/verl
+
+WORKDIR /opt/verl
+
+ENTRYPOINT []
+CMD ["/bin/bash"]
